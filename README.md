@@ -2,6 +2,12 @@
 
 Reduce fast-motion smearing, stuck poses, and frame stepping in MiniMax H3 generations. **H3 Latent Auto Repair & Upscale** prepares a second H3 sampling pass directly from the first pass's latent. The default export keeps the source frame count, 24 fps playback, and first-pass audio. An optional spatial pass increases resolution during the same refinement.
 
+## See the difference
+
+[![Backflip comparison showing the source leg smear and the joint latent repair](demos/backflip-spatial-temporal.jpg)](demos/backflip-spatial-temporal.mp4)
+
+[Watch the backflip](demos/backflip-spatial-temporal.mp4) or browse [all three side-by-side demos](demos/README.md), including a matched pixel De-RoPE comparison and a test of adaptive 1×/2×/3× repair. Every clip plays at the source's 24 fps.
+
 ## Quick start
 
 1. Use a recent ComfyUI build with native MiniMax H3 support. The development install used ComfyUI 0.45.0. Install the following custom node packs into its `custom_nodes` folder, following their instructions.
