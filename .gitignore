@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.ckpt
+*.mp4
+*.wav
+.env
+.env.*
+.DS_Store
+Thumbs.db
