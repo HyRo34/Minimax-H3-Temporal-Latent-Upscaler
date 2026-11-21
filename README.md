@@ -1,12 +1,14 @@
 # MiniMax H3 Temporal Latent Upscaler for ComfyUI
 
-Reduce fast-motion smearing, stuck poses, and frame stepping in MiniMax H3 generations. **H3 Latent Auto Repair & Upscale** prepares a second H3 sampling pass directly from the first pass's latent. The default export keeps the source frame count, 24 fps playback, and first-pass audio. An optional spatial pass increases resolution during the same refinement.
+Repair fast-motion smearing and frame stepping in MiniMax H3 videos. This ComfyUI node takes the **latent output of your first H3 sampler** and gives H3 more frames to redraw difficult motion. The 2× and 3× settings stretch the timeline **during repair**. A 90-frame input still exports as 90 frames at 24 fps with its first-pass audio. You can also increase the spatial resolution in the same repair pass.
 
 ## See the difference
 
-[![Backflip comparison showing the source leg smear and the joint latent repair](demos/backflip-spatial-temporal.jpg)](demos/backflip-spatial-temporal.mp4)
+[![Looping backflip comparison. Left, the H3 source. Right, joint spatial and temporal repair.](demos/backflip-preview.webp)](demos/README.md#backflip--spatial-and-temporal-repair)
 
-[Watch the backflip](demos/backflip-spatial-temporal.mp4) or browse [all three side-by-side demos](demos/README.md), including a matched pixel De-RoPE comparison and a test of adaptive 1×/2×/3× repair. Every clip plays at the source's 24 fps.
+**Watch the trailing leg during the flip.** The source on the left shows a translucent second outline. The pass on the right redraws the pose with 2× temporal repair and 1.5× spatial upscaling. Both panels play at the same speed. [Full-size clip and still](demos/README.md#backflip--spatial-and-temporal-repair)
+
+For a same-resolution comparison, the basketball demo puts the source, pixel De-RoPE and latent repair side by side. The anime demo shows how adaptive repair can change the sword arc. [Comparison gallery](demos/README.md)
 
 ## Quick start
 
@@ -21,8 +23,8 @@ Reduce fast-motion smearing, stuck poses, and frame stepping in MiniMax H3 gener
    ```
 
    You can also extract the GitHub ZIP into `custom_nodes/`. Make sure the extracted folder directly contains `__init__.py`. The pack uses PyTorch and safetensors from the ComfyUI environment.
-3. If you already have a working H3 setup, you can select your installed H3 model, text encoder, and VAEs in the graph. The exact preset files are listed below. Create `models/h3_temporal_models/` if needed and keep the checkpoint's original filename.
-4. Restart ComfyUI. Drag a JSON from [workflows](workflows/) onto the canvas. Start with **Fast**, edit the prompt, and queue. For an image-based workflow, select your own image in each active **Load Image** node before queuing. The presets save MP4s under `ComfyUI/output/video/`.
+3. Download **George0667's temporal v2 BF16 checkpoint** from the first row below. Put it in `ComfyUI/models/h3_temporal_models/`, creating the folder if needed. Keep the original filename. If you already generate H3 videos, select your installed H3 model, text encoder, and VAEs in the graph. For a fresh setup, use the remaining rows.
+4. Restart ComfyUI. In the cloned pack's `workflows/` folder, drag **`H3_Latent_Temporal_Repair_Fast.json`** onto the canvas. Edit the prompt and queue. For an image-based workflow, choose your own image in each active **Load Image** node first. Find the finished MP4 in `ComfyUI/output/video/`. [Browse the workflows](workflows/)
 
 ### Preset files
 
@@ -70,7 +72,7 @@ The pixel-space De-RoPE workflow decodes the first video, stretches it with repe
 ## Tuning and limits
 
 - Start with **Auto Adaptive** at `spatial_scale=1.0`. Select `auto_2x` for a cheaper pass when adaptive 3× adds little. Use `full_2x` or `full_3x` when the whole clip needs repair.
-- In **manual** mode, enter zero-based ranges with exclusive ends, such as `17-51`. Ranges snap out to the H3 block boundaries and use 2×. Enter `all` for the full clip. An optional Jerk Oracle hold map selects blocks using its holds greater than one.
+- In **manual** mode, enter zero-based ranges with exclusive ends, such as `17-51`. Ranges snap out to the H3 block boundaries and use 2×. Enter `all` for the full clip. A connected Jerk Oracle hold map takes priority over the detector and manual ranges. Holds greater than one select a block. Selected blocks use 3× in `auto_3x` or `full_3x` and 2× in the other modes.
 - For a subtler repair, lower the inject setting toward `0.33`. If you see pose, dialogue, or timing drift, compare against first-pass output before increasing the strength. When all blocks are 1× at the original resolution, the preset can still invoke the second sampler.
 - These graphs expect the first sampler's H3 latent. H3 sizes fit a 32-pixel grid and source lengths follow `17k + 5` frames. Use the `_temporal_` checkpoint variant. Joint scaling costs more GPU time, particularly at 2× spatial with long clips.
 
@@ -90,6 +92,6 @@ Release checks covered all four graphs in ComfyUI's prompt validator, including 
 - **MiniMax**, **Comfy Org**, **Kijai**, **DeepBeepMeep**, **city96**, **ncrzy**, and **NVIDIA** for the underlying H3 model, ComfyUI integration, low-memory nodes, model builds, GGUF tooling and encoder, and optional RTX finishing. H3 assets have their own terms. [MiniMax H3 model and license](https://huggingface.co/MiniMaxAI/MiniMax-H3)
 - **TK_999**, **Kijai**, and the **Banodoco** community for the museum-sprint and café-dialogue test scenarios and discussion.
 
-Model weights are downloaded from their publishers. The repository contains node code and example graphs.
+## Licensing
 
-The MIT notice covers the adapted LBH backbone. A license for the original node code and workflows has yet to be selected.
+The [MIT notice](LICENSES/LBH-MIT.txt) covers the adapted LBH backbone. The original node code and workflows do not currently have a project-wide license. Download model weights from their publishers under the terms linked above.
