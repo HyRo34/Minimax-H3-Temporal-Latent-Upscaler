@@ -92,8 +92,15 @@ def _auto_block_scores(video):
             scores.append(max(excess))
             global_means.append(float(diff_4f.mean()))
         else:
-            diff_tail = (vid[:, :, base + 1:base + 2] - vid[:, :, max(0, base - 1):max(1, base)]).pow(2).mean(dim=1).sqrt()
-            diff_tail *= 0.8 if base else 1.6
+            if base == 0:
+                if token_count >= 2:
+                    diff_tail = (vid[:, :, 1:2] - vid[:, :, 0:1]).pow(2).mean(dim=1).sqrt() * (4.0 / 2.5)
+                else:
+                    scores.append(0.0)
+                    global_means.append(0.0)
+                    continue
+            else:
+                diff_tail = (vid[:, :, base + 1:base + 2] - vid[:, :, base - 1:base]).pow(2).mean(dim=1).sqrt() * (4.0 / 5.0)
             flat = diff_tail.flatten()
             scores.append(float(torch.quantile(flat, 0.98) - torch.quantile(flat, 0.50)))
             global_means.append(float(diff_tail.mean()))
@@ -106,8 +113,11 @@ def _auto_motion_windows(video, abs_thresh=0.45, rel_ratio=0.55):
     peak = max(scores) if scores else 0.0
     gate = max(abs_thresh, peak * rel_ratio)
     windows = []
+    last_block = len(scores) - 1
     for block_idx, (score, gmean) in enumerate(zip(scores, global_means)):
-        if score >= gate or gmean >= 0.55:
+        is_short_tail = (block_idx == last_block and (world_len - block_idx * 17) <= 5)
+        gmean_hit = gmean >= (0.70 if is_short_tail else 0.55)
+        if score >= gate or gmean_hit:
             start = block_idx * 17
             end = min(world_len, (block_idx + 1) * 17)
             if windows and windows[-1][1] == start:
@@ -125,10 +135,12 @@ def _auto_adaptive_block_dilations(video, low_thresh=0.45, high_thresh=0.75, rel
     high_gate = max(high_thresh, low_gate + 0.10)
     block_dilations = []
     windows = []
+    last_block = len(scores) - 1
     for block_idx, (score, gmean) in enumerate(zip(scores, global_means)):
-        if score >= high_gate or gmean >= 0.70:
+        is_short_tail = (block_idx == last_block and (world_len - block_idx * 17) <= 5)
+        if score >= high_gate or gmean >= (0.85 if is_short_tail else 0.70):
             dil = 3
-        elif score >= low_gate or gmean >= 0.55:
+        elif score >= low_gate or gmean >= (0.70 if is_short_tail else 0.55):
             dil = 2
         else:
             dil = 1
@@ -229,7 +241,7 @@ def _block_mask(motion, base_video, latent, holds, spatial_scale=1.0, untouched_
 
 
 class H3AdaptiveLatentRepair(io.ComfyNode):
-    """Simplified production node for H3 latent auto-motion repair & joint spatial+temporal upscale."""
+    """Production node for H3 latent auto-motion repair and joint spatial+temporal upscaling."""
 
     MOTION_MODES = [
         "auto_adaptive (1x/2x/3x)",
@@ -242,24 +254,24 @@ class H3AdaptiveLatentRepair(io.ComfyNode):
 
     @classmethod
     def define_schema(cls):
-        models = folder_paths.get_filename_list(TEMPORAL_MODELS)
-        default_ckpt = PREFERRED_CHECKPOINT if PREFERRED_CHECKPOINT in models or not models else models[0]
+        checkpoints = folder_paths.get_filename_list(TEMPORAL_MODELS) or [PREFERRED_CHECKPOINT]
+        default_ckpt = PREFERRED_CHECKPOINT if PREFERRED_CHECKPOINT in checkpoints else checkpoints[0]
         return io.Schema(
             node_id="H3AdaptiveLatentRepair",
             display_name="H3 Latent Auto Repair & Upscale",
             category="latent/minimax/motion",
-            description="Clean production node: auto-detects fast-motion 17-frame blocks in latent space (no Pass-1 VAE decode), time-aligns Pass-1 audio latents for refinement, and optionally applies joint spatial upscaling.",
+            description="Auto-detects fast-motion 17-frame blocks directly in latent space, applies adaptive 1x/2x/3x temporal dilation and optional 1.5x-2.0x spatial upscaling via George0667's temporal checkpoint, preserves first-pass audio, and aligns FL2V/I2V keyframes.",
             inputs=[
                 io.Latent.Input("samples"),
                 io.Conditioning.Input("conditioning"),
-                io.Combo.Input("checkpoint", options=models or [PREFERRED_CHECKPOINT], default=default_ckpt,
-                               tooltip="Joint spatial+temporal latent resizer (George0667 v2 temporal BF16 or FP16)."),
+                io.Combo.Input("checkpoint", options=checkpoints, default=default_ckpt,
+                               tooltip="Place the temporal checkpoint in ComfyUI/models/h3_temporal_models/ (George0667 v2 temporal BF16 or FP16)."),
                 io.Combo.Input("motion_mode", options=cls.MOTION_MODES, default="auto_adaptive (1x/2x/3x)",
                                tooltip="auto_adaptive: 1x calm / 2x moderate / 3x extreme bursts. auto_2x/auto_3x: uniform dilation on hot blocks only. full_2x/full_3x: whole clip. manual: use manual_ranges."),
                 io.Float.Input("spatial_scale", default=1.0, min=1.0, max=2.0, step=0.25,
                                tooltip="1.0 = same-res repair; 1.5 = 640x384->960x576; 2.0 = 640x384->1280x768."),
-                io.Float.Input("untouched_spatial_denoise", default=0.7, min=0.0, max=1.0, step=0.05,
-                               tooltip="Denoise mask on untouched 1x blocks when spatial_scale > 1.0 (0.7 preserves faces/backgrounds while sharpening)."),
+                io.Float.Input("untouched_spatial_denoise", default=0.85, min=0.0, max=1.0, step=0.05,
+                               tooltip="Denoise mask on untouched 1x blocks when spatial_scale > 1.0 (0.85 balances crispness and preservation)."),
                 io.String.Input("manual_ranges", default="", optional=True,
                                 tooltip="Used when motion_mode='manual' (e.g. '17-50') or optional threshold override (e.g. '0.45,0.75' for adaptive, '0.40' for auto_2x/3x)."),
                 io.String.Input("oracle_hold_map", force_input=True, optional=True,
@@ -275,8 +287,9 @@ class H3AdaptiveLatentRepair(io.ComfyNode):
         )
 
     @classmethod
+    @torch.inference_mode()
     def execute(cls, samples, conditioning, checkpoint, motion_mode="auto_adaptive (1x/2x/3x)",
-                spatial_scale=1.0, untouched_spatial_denoise=0.7,
+                spatial_scale=1.0, untouched_spatial_denoise=0.85,
                 manual_ranges="", oracle_hold_map=None):
         insert, motion = _mainodes()
         video = _video(samples)
@@ -338,16 +351,16 @@ class H3AdaptiveLatentRepair(io.ComfyNode):
         output["noise_mask"] = NestedTensor((torch.zeros_like(expanded_video[:, :1]), torch.zeros_like(audio)))
 
         base_video = video
-        resizer = None
+        loaded = None
+        path = None
+        device = model_management.get_torch_device()
         if needs_temporal or needs_spatial:
             from .temporal_checkpoint import expand_video, load_resizer
 
             if not checkpoint.endswith(".safetensors"):
-                raise ValueError("Select the George0667 v2 temporal .safetensors checkpoint.")
+                raise ValueError("Download a .safetensors temporal checkpoint into ComfyUI/models/h3_temporal_models/.")
             path = folder_paths.get_full_path_or_raise(TEMPORAL_MODELS, checkpoint)
-            device = model_management.get_torch_device()
-            model_management.unload_all_models()
-            resizer = load_resizer(path, device)
+            loaded = load_resizer(path, device)
             uniform = {}
             for factor in sorted(set(factors)):
                 if factor == 1 and not needs_spatial:
@@ -357,8 +370,10 @@ class H3AdaptiveLatentRepair(io.ComfyNode):
                     target_tokens = video.shape[2]
                 else:
                     _, _, _, target_tokens, _ = motion.temporal_insert_map([factor] * world_len)
-                uniform[factor] = expand_video(video, target_tokens, factor, device, motion,
-                                               spatial_scale, target_hw, resizer)
+                uniform[factor] = expand_video(
+                    video, target_tokens, factor, path, device, motion,
+                    spatial_scale=spatial_scale, target_hw=target_hw, loaded=loaded,
+                )
             base_video = uniform.get(1, video)
             pieces = []
             for block_index, factor in enumerate(factors):
@@ -390,23 +405,219 @@ class H3AdaptiveLatentRepair(io.ComfyNode):
                 if needs_spatial and keyframe is not None and tuple(keyframe.shape[-2:]) != target_hw:
                     cache_key = id(keyframe)
                     if cache_key not in resized_guides:
-                        guide_input = keyframe.repeat(1, 1, 5, 1, 1) if keyframe.shape[2] == 1 else keyframe
-                        resized = expand_video(guide_input, guide_input.shape[2], 1, device, motion,
-                                               spatial_scale, target_hw, resizer)
-                        resized_guides[cache_key] = resized[:, :, :keyframe.shape[2]].clone()
+                        if keyframe.shape[2] == 1:
+                            guide_input = keyframe.repeat(1, 1, 5, 1, 1)
+                            resized = expand_video(
+                                guide_input, guide_input.shape[2], 1, path, device, motion,
+                                spatial_scale=spatial_scale, target_hw=target_hw, loaded=loaded,
+                            )
+                            resized_guides[cache_key] = resized[:, :, 2:3].clone()
+                        else:
+                            resized = expand_video(
+                                keyframe, keyframe.shape[2], 1, path, device, motion,
+                                spatial_scale=spatial_scale, target_hw=target_hw, loaded=loaded,
+                            )
+                            resized_guides[cache_key] = resized[:, :, :keyframe.shape[2]].clone()
                     shifted["latent"] = resized_guides[cache_key]
                 remapped.append(shifted)
             if remapped:
                 metadata = {**metadata, "minimax_keyframes": sorted(remapped, key=lambda guide: guide["resolved_frame_index"])}
             adjusted.append([embedding, metadata])
 
-        if resizer is not None:
-            del resizer, pieces, uniform, base_video
-            model_management.soft_empty_cache()
-
         used.update(repair_ranges=ranges, block_dilations=factors, unpadded_expanded_frames=unpadded)
         report = f"H3 block dilation: {factors}. Working timeline: {expanded} frames. Final timeline: {world_len} frames."
         return io.NodeOutput(output, adjusted, json.dumps(used), expanded, report)
+
+
+class H3RepairSchedule(io.ComfyNode):
+    """Build the Pass-2 inject sigma tail, returning an empty 0-step schedule when nothing is masked."""
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="H3RepairSchedule",
+            display_name="H3 Repair Inject Schedule (Auto-Skip)",
+            category="latent/minimax/motion",
+            description="Generates the Pass-2 denoising tail schedule (matching H3InjectSchedule) and automatically returns an empty 0-step schedule when the repair noise_mask is all zero (calm clips at 1x), skipping Pass-2 sampling completely.",
+            inputs=[
+                io.Model.Input("model"),
+                io.Latent.Input("samples"),
+                io.Combo.Input("scheduler", options=["beta", "simple", "normal", "sgm_uniform", "karras", "exponential"], default="beta"),
+                io.Int.Input("total_steps", default=12, min=4, max=100),
+                io.Float.Input("inject", default=0.42, min=0.05, max=1.0, step=0.01),
+                io.Boolean.Input("skip_if_unmasked", default=True,
+                                 tooltip="When true and noise_mask is all zero (no dilated blocks at 1x), return an empty schedule so SamplerCustomAdvanced skips Pass 2 in 0 steps."),
+            ],
+            outputs=[
+                io.Sigmas.Output(display_name="sigmas"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, model, samples, scheduler="beta", total_steps=12, inject=0.42, skip_if_unmasked=True):
+        import comfy.samplers as comfy_samplers
+
+        if skip_if_unmasked and isinstance(samples, dict) and "noise_mask" in samples:
+            mask = samples["noise_mask"]
+            if mask is not None:
+                if getattr(mask, "is_nested", False):
+                    active = any(float(t.max().item()) > 1e-6 for t in mask.unbind() if t.numel() > 0)
+                else:
+                    active = (mask.numel() > 0 and float(mask.max().item()) > 1e-6)
+                if not active:
+                    return io.NodeOutput(torch.empty((0,), dtype=torch.float32))
+
+        ms = model.get_model_object("model_sampling")
+        n_steps = int(total_steps)
+        full = comfy_samplers.calculate_sigmas(ms, scheduler, n_steps).cpu()
+        run = max(1, int(round(n_steps * float(inject))))
+        tail = full[n_steps - run:]
+        return io.NodeOutput(tail)
+
+
+class H3ExactVAEDecode(io.ComfyNode):
+    """Decode an H3 video latent and recover exact real-time frames, trimming trailing snap-pad chunks."""
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="H3ExactVAEDecode",
+            display_name="H3 Exact VAE Decode & Recover",
+            category="latent/minimax/motion",
+            description="Decodes an H3 video latent and applies exact hold-map frame recovery in one step. Skips trailing VAE chunks beyond the last kept frame and falls back to normal decode when hold_map is empty (e.g. when Pass 2 is bypassed).",
+            inputs=[
+                io.Latent.Input("samples"),
+                io.Vae.Input("vae"),
+                io.String.Input("hold_map", default="", optional=True,
+                                tooltip="Optional hold_map JSON from H3 Latent Auto Repair. Leave blank or unlinked when Pass 2 is bypassed."),
+                io.Boolean.Input("trim_tail_padding", default=True, optional=True,
+                                 tooltip="Skip trailing VAE temporal chunks that fall strictly after the last recovered frame."),
+            ],
+            outputs=[
+                io.Image.Output(display_name="IMAGE"),
+            ],
+        )
+
+    @classmethod
+    @torch.inference_mode()
+    def _decode_trimmed_temporal(cls, vae, video, cutoff_frames):
+        fsm = vae.first_stage_model
+        vae.throw_exception_if_invalid()
+        memory_used = vae.memory_used_decode(video.shape, vae.vae_dtype)
+        model_management.load_models_gpu([vae.patcher], memory_required=memory_used, force_full_load=vae.disable_offload)
+
+        with model_management.cuda_device_context(vae.device):
+            z = video.to(vae.vae_dtype).to(vae.device)
+            latents_mean = fsm.latents_mean.view(1, -1, 1, 1, 1).to(z)
+            latents_std = fsm.latents_std.view(1, -1, 1, 1, 1).to(z)
+            z = z * latents_std + latents_mean
+
+            chunk_dec = fsm.tokens_chunk_size * fsm.vae_ratio_t
+            split_count = int(fsm.token_drop > 0) + 1
+            full_shape = fsm.decode_output_shape(z.shape)
+            keep_len = min(int(cutoff_frames), full_shape[2])
+            output_buffer = torch.empty(
+                (full_shape[0], full_shape[1], keep_len, full_shape[3], full_shape[4]),
+                dtype=torch.float32,
+                device=model_management.intermediate_device(),
+            )
+
+            pad_tokens, num_chunks = fsm._decode_temporal_chunks(z.shape[2])
+            if pad_tokens > 0:
+                pad_z = z[:, :, -1:, :, :].repeat(1, 1, pad_tokens, 1, 1)
+                z = torch.cat([z, pad_z], dim=2)
+
+            dec_overlap = None
+            write_pos = 0
+
+            def write_part(part):
+                nonlocal write_pos
+                part_frames = part.shape[2]
+                if part_frames <= 0 or write_pos >= keep_len:
+                    return
+                copy_frames = min(part_frames, keep_len - write_pos)
+                part = fsm._finalize_pixels(part[:, :, :copy_frames, :, :])
+                output_buffer[:, :, write_pos:write_pos + copy_frames, :, :].copy_(part)
+                write_pos += copy_frames
+
+            for i in range(num_chunks):
+                if write_pos >= keep_len:
+                    break
+                t_start_idx = i * fsm.tokens_chunk_size
+                t_end_idx = t_start_idx + fsm.tokens_chunk_size + fsm.token_overlap
+                clip_z = z[:, :, t_start_idx:t_end_idx, :, :]
+                clip_dec = fsm._adaptive_decode(clip_z)
+
+                for j in range(split_count):
+                    f_start_idx = j * chunk_dec
+                    f_end_idx = min(f_start_idx + chunk_dec, clip_dec.shape[2])
+                    clip_dec_chunk = clip_dec[:, :, f_start_idx:f_end_idx, :, :]
+                    clip_dec_chunk = clip_dec_chunk[:, :, fsm.frame_pre_padding:, :, :]
+                    if j == 0:
+                        if dec_overlap is not None:
+                            clip_dec_chunk = fsm.blend(dec_overlap, clip_dec_chunk, fsm.frame_overlap, dim=-3)
+                            dec_overlap = None
+                        write_part(clip_dec_chunk)
+                    else:
+                        dec_overlap = clip_dec_chunk.contiguous()
+
+                if i == num_chunks - 1 and dec_overlap is not None and write_pos < keep_len:
+                    write_part(dec_overlap)
+                    dec_overlap = None
+
+                del clip_dec, clip_z, clip_dec_chunk
+
+        images = output_buffer.movedim(1, -1)
+        if images.ndim == 5:
+            images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
+        return images
+
+    @classmethod
+    @torch.inference_mode()
+    def execute(cls, samples, vae, hold_map="", trim_tail_padding=True):
+        video = _video(samples)
+        holds = None
+        if isinstance(hold_map, str) and hold_map.strip().startswith("{"):
+            try:
+                data = json.loads(hold_map)
+                if isinstance(data, dict) and data.get("holds"):
+                    holds = data["holds"]
+            except (json.JSONDecodeError, TypeError):
+                holds = None
+
+        if not holds:
+            images = vae.decode(video)
+            if images.ndim == 5:
+                images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
+            return io.NodeOutput(images.cpu())
+
+        starts, cur = [], 0
+        for h in holds:
+            starts.append(cur)
+            cur += h
+
+        fsm = getattr(vae, "first_stage_model", None)
+        can_trim = (
+            trim_tail_padding
+            and fsm is not None
+            and not getattr(fsm, "noncausal", True)
+            and hasattr(fsm, "_decode_temporal_chunks")
+            and hasattr(fsm, "_adaptive_decode")
+            and video.shape[2] > 1
+        )
+        if can_trim:
+            expected_total = fsm.decode_output_shape(video.shape)[2]
+            if cur != expected_total:
+                raise RuntimeError(f"Hold map sums to {cur} frames, expected {expected_total} from latent.")
+            images = cls._decode_trimmed_temporal(vae, video, cutoff_frames=starts[-1] + 1)
+        else:
+            images = vae.decode(video)
+            if images.ndim == 5:
+                images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
+            if cur != images.shape[0]:
+                raise RuntimeError(f"Hold map sums to {cur} frames, decoded {images.shape[0]}.")
+
+        return io.NodeOutput(images[torch.tensor(starts)].cpu())
 
 
 class H3RepairDecodeAudio(io.ComfyNode):
@@ -422,6 +633,7 @@ class H3RepairDecodeAudio(io.ComfyNode):
         )
 
     @classmethod
+    @torch.inference_mode()
     def execute(cls, samples, vae):
         audio = _audio(samples)
         if audio is None:
@@ -438,7 +650,7 @@ class H3RepairDecodeAudio(io.ComfyNode):
 
 class H3LatentRepairExtension(ComfyExtension):
     async def get_node_list(self):
-        return [H3AdaptiveLatentRepair, H3RepairDecodeAudio]
+        return [H3AdaptiveLatentRepair, H3RepairSchedule, H3ExactVAEDecode, H3RepairDecodeAudio]
 
 
 async def comfy_entrypoint():
