@@ -635,10 +635,10 @@ class H3RepairSchedule(io.ComfyNode):
                 io.Model.Input("model"),
                 io.Latent.Input("samples"),
                 io.Combo.Input("scheduler", options=["beta", "simple", "normal", "sgm_uniform", "karras", "exponential"], default="beta"),
-                io.Int.Input("total_steps", default=16, min=4, max=100,
-                             tooltip="Total schedule steps before slicing the tail (16/0.35 = 6 steps @ sigma 0.855 universal default for 1.0x & 1.5x; 20/0.30 = 6 steps @ sigma 0.787 for tighter Pass-1 lock; 12/0.42 = 5 steps @ sigma 0.883 for faster/heavier redraw)."),
-                io.Float.Input("inject", default=0.35, min=0.05, max=1.0, step=0.01,
-                               tooltip="Fraction of total_steps to run in Pass 2 (default 0.35 of 16 = 6 steps @ sigma 0.855 with a clean detail step at 0.189; pair with deterministic res_multistep)."),
+                io.Int.Input("total_steps", default=12, min=4, max=100,
+                             tooltip="Total schedule steps before slicing the tail (12/0.42 = 5 steps @ sigma 0.883 fast smudge-free default across 1.0x & 1.5x; 16/0.35 = 6 steps @ sigma 0.855 or 20/0.30 = 6 steps @ sigma 0.787 for tighter Pass-1 pose lock)."),
+                io.Float.Input("inject", default=0.42, min=0.05, max=1.0, step=0.01,
+                               tooltip="Fraction of total_steps to run in Pass 2 (default 0.42 of 12 = 5 steps @ sigma 0.883 with a dense final detail step at 0.271; pair with deterministic res_multistep)."),
                 io.Boolean.Input("skip_if_unmasked", default=True,
                                  tooltip="When true and noise_mask is all zero (no dilated blocks at 1x), return an empty schedule so SamplerCustomAdvanced skips Pass 2 in 0 steps."),
             ],
@@ -648,7 +648,7 @@ class H3RepairSchedule(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, model, samples, scheduler="beta", total_steps=16, inject=0.35, skip_if_unmasked=True):
+    def execute(cls, model, samples, scheduler="beta", total_steps=12, inject=0.42, skip_if_unmasked=True):
         import comfy.samplers as comfy_samplers
 
         if skip_if_unmasked and isinstance(samples, dict) and "noise_mask" in samples:

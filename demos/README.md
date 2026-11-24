@@ -8,7 +8,7 @@ Each panel shows the same output frame index at the original 24 fps. The 2× and
 
 [Download MP4 with audio](parkour-live-v21.mp4?raw=1) · [Inspect frame 82](parkour-live-v21.jpg) · 90 frames (`3.75s`)
 
-Generated with the v2.1 unified workflow defaults (`res_multistep`, `beta 16 / 0.35`, `BlockSparseAttention` `min_tokens=20480` / `end_percent=0.95` / `exact_kv_and_rows`, decoupled `spatial_checkpoint=auto`). Watch the landing face, hands, sneakers, and brick/railing lines: `1.0×` stays 100% dense and removes motion smear at `672×384`, while `1.5×` upgrades to crisp `1024×576` with zero grid artifacts.
+Generated with the v2.1 unified workflow defaults (`res_multistep`, 5-step `beta 12 / 0.42`, `BlockSparseAttention` `min_tokens=20480` / `end_percent=0.95` / `exact_kv_and_rows`, decoupled `spatial_checkpoint=auto`). Watch the landing face, hands, sneakers, and brick/railing lines: `1.0×` stays 100% dense and removes motion smear at `672×384`, while `1.5×` upgrades to crisp `1024×576` with zero grid artifacts.
 
 ## 2D anime courtyard slash · Adaptive 1×/2×/3× + decoupled 1.5× spatial *(v2.1 default)*
 
@@ -16,7 +16,7 @@ Generated with the v2.1 unified workflow defaults (`res_multistep`, `beta 16 / 0
 
 [Download MP4 with audio](anime-courtyard-v21.mp4?raw=1) · [Inspect frame 53](anime-courtyard-v21.jpg) · 90 frames (`3.75s`)
 
-Adaptive motion detection expanded only the midair somersault and slash blocks (`[1, 1, 2, 3, 2, 1]`). Watch frame 53 and the spinning flip: the source smears and loses her face during the draw, while the v2.1 `1.5×` pass restores crisp cel linework, eyes, hands, and katana detail while keeping calm intro/landing frames faithful to Pass 1.
+Adaptive motion detection expanded only the midair somersault and slash blocks (`[1, 1, 2, 3, 2, 1]`). Watch frame 53 and the spinning flip: the source smears and loses her face during the draw, while the v2.1 5-step `1.5×` pass (`res_multistep`, `beta 12 / 0.42`, `end_percent=0.95`) restores razor-sharp cel linework, eyes, hands, and katana detail with zero flip-foot smudging.
 
 ## Backflip · Spatial and temporal repair
 
