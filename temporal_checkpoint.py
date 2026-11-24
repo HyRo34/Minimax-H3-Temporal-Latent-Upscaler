@@ -41,12 +41,36 @@ def _resample_temporal(features, source_times, target_times):
     dst_t = torch.as_tensor(target_times, dtype=torch.float64).clamp(src_t[0], src_t[-1])
     hi = torch.searchsorted(src_t, dst_t, right=True).clamp(1, src_t.numel() - 1)
     lo = hi - 1
-    fraction = ((dst_t - src_t[lo]) / (src_t[hi] - src_t[lo])).to(device=device, dtype=features.dtype).view(1, 1, -1, 1, 1)
+    fraction = ((dst_t - src_t[lo]) / (src_t[hi] - src_t[lo])).to(device=device, dtype=features.dtype)
     lo_dev = lo.to(device)
     hi_dev = hi.to(device)
-    # Resample per-slab if large, preserving channels_last_3d for downstream convs.
-    out = features.index_select(2, lo_dev).lerp(features.index_select(2, hi_dev), fraction)
-    return out.contiguous(memory_format=torch.channels_last_3d)
+    n, c, _, h, w = features.shape
+    out_t = dst_t.numel()
+    out = torch.empty((n, c, out_t, h, w), dtype=features.dtype, device=device, memory_format=torch.channels_last_3d)
+    for t0, t1, _, _ in slabs(out_t, 0):
+        w_slab = fraction[t0:t1].view(1, 1, -1, 1, 1)
+        out[:, :, t0:t1] = features.index_select(2, lo_dev[t0:t1]).lerp_(
+            features.index_select(2, hi_dev[t0:t1]), w_slab
+        )
+    return out
+
+
+def _resize_spatial(features, target_hw):
+    n, c, t, _, _ = features.shape
+    out = torch.empty(
+        (n, c, t, target_hw[0], target_hw[1]),
+        dtype=features.dtype,
+        device=features.device,
+        memory_format=torch.channels_last_3d,
+    )
+    for t0, t1, _, _ in slabs(t, 0):
+        out[:, :, t0:t1] = F.interpolate(
+            features[:, :, t0:t1],
+            size=(t1 - t0, target_hw[0], target_hw[1]),
+            mode="trilinear",
+            align_corners=False,
+        )
+    return out
 
 
 class MiniMaxH3TemporalLatentUpscaler(MiniMaxH3LatentUpscaler):
@@ -106,9 +130,7 @@ class MiniMaxH3TemporalLatentUpscaler(MiniMaxH3LatentUpscaler):
         if needs_temporal:
             x = _resample_temporal(x, source_times, target_times)
         if target_hw is not None and tuple(x.shape[3:]) != target_hw:
-            x = F.interpolate(
-                x, size=(x.shape[2], *target_hw), mode="trilinear", align_corners=False,
-            ).contiguous(memory_format=torch.channels_last_3d)
+            x = _resize_spatial(x, target_hw)
         x = self.run_blocks(self.out_blocks, x, emb)
 
         out = torch.empty((x.shape[0], self.conv_out.out_channels) + tuple(x.shape[2:]), device=x.device, dtype=x.dtype)
@@ -163,7 +185,7 @@ def load_resizer(checkpoint_path, device=None):
     return result
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def expand_video(video, target_tokens, ratio, checkpoint_path, device, motion,
                  target_source_times=None, uniform_first=False,
                  spatial_scale=1.0, target_hw=None, loaded=None):
